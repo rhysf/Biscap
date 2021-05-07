@@ -2,9 +2,9 @@
 use strict;
 use Bio::SeqIO;
 use Getopt::Std;
-use FindBin; 
-use lib "$FindBin::Bin/";
-use ASCII;
+use FindBin qw($Bin);
+use lib "$Bin/modules/";
+use ascii;
 my %ascii = ascii::ascii(); # a hash of ASCII symbols to values.
 
 ### r.farrer09@imperial.ac.uk
@@ -15,9 +15,7 @@ my $usage = "
 Program:  Binomial SNP Caller from Pileup (BiSCaP)
 Version:  0.11
 Contact:  Rhys Farrer <r.farrer09\@imperial.ac.uk>
-
 Usage:    $0 <commands>
-
 Commands: -p\tAlignment in Pileup format 
           -r\tReference sequence in FASTA format
           

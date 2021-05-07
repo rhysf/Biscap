@@ -1,5 +1,4 @@
 package ascii;
-## rhys farrer 16 April r.farrer09@imperial.ac.uk
 use strict;
 use Exporter;
 use Encode;
@@ -8,8 +7,9 @@ $VERSION = 0.1;
 @ISA = qw(Exporter);
 @EXPORT = ();
 @EXPORT_OK = qw();
-%EXPORT_TAGS = (DEFAULT => [qw()],
-				ALL =>[qw()]);
+%EXPORT_TAGS = (DEFAULT => [qw()], ALL =>[qw()]);
+
+### rfarrer@broadinstitute.org
 
 sub ascii {
 	my %symbol_to_ascii;
@@ -152,6 +152,5 @@ sub ascii {
 
 	return %symbol_to_ascii;
 }
+
 1;
-
-

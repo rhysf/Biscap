@@ -1,4 +1,12 @@
+2021 Note: Biscap_legacy.pl is described in Farrer et al 2013 Sci Rep.
+It has been actively developed, and other variant callers are generally
+recomended. However, some of the utility scripts including GBID, IRMS,
+and CFDR still have a use case assessing variant caller quality. Furthermore,
+the code for Biscap has been tidied up, and may be developed and tested
+in the future.
+
 NAME
+      
        Binomial SNP Caller from Pileup and Comparison of false discovery rates
 
 SYNOPSIS
@@ -55,9 +63,9 @@ COMMANDS AND OPTIONS
                           mutations are placed in the genome. [anywhere]
                          
                   -f      Feature in the GFF/GTF to mutate (CDS, exon, mRNA etc.)
-       
-                  
-        BiSCaP.pl perl BiSCaP.pl -p aln.pileup -r ref.fasta <optional params>
+
+
+        Biscap.pl perl Biscap.pl -p aln.pileup -r ref.fasta <optional params>
         
                   Binomial SNP Caller from Pileup uses a look up table of 
                   Binomial probabilities to calculate the consensus sequence
@@ -81,20 +89,11 @@ COMMANDS AND OPTIONS
                   -g      If depth > max depth in look-up table, analyse up to 
                           max depth (y/n) [y]
                   
-                  -a      Print out homozygous Agree lines (y/n) [n]
-                  
-                  -i      Print out seperated pileup lines specifying SNPs and 
-                          indels in addition to the all mutations file (y/n) [n]
-                          
                   -q      Read Quality minimum cut-off for SNPs (e.g. 10, 20...) 
                           [0]
                           
-                  -o      Output folder location. [folder of pileup]
-                  
-                  -n      Sample name for VCF [name of pileup]
-                  
-                  -d      Print tallied read depths across genome (y/n) [n]
-                          
+                  -n      Sample name for VCF [WGS]
+
         CFDR.pl   perl CFDR.pl -i IntroducedMutations -m FoundMutations 
                   -p Pileup <optional params>
                           
@@ -121,6 +120,13 @@ COMMANDS AND OPTIONS
                   
 RELEASES
 
+v0.12
+
+* Code tidy up and refinement.
+
+v0.111 (2013)
+
+* Fixed error printing homozygous agree lines
 * Fixed error finding long indels when depth > max depth and optg is used.
 
 v0.11 (9 October 2012)
