@@ -1,5 +1,5 @@
 2021 Note: Biscap_legacy.pl is described in Farrer et al 2013 Sci Rep.
-It has been actively developed, and other variant callers are generally
+It has NOT been actively developed, and other variant callers are 
 recomended. However, some of the utility scripts including GBID, IRMS,
 and CFDR still have a use case assessing variant caller quality. Furthermore,
 the code for Biscap has been tidied up, and may be developed and tested
