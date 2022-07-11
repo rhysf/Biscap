@@ -100,7 +100,7 @@ if($opt_f eq 'genome') {
 			my $random_number_in_id = ($numbers - $seq_length_gone_through);
 			if(($random_number_in_id <= length($seq)) && ($random_number_in_id > 1)) {
 				
-				my $nt = $nts[$random_number_in_id];
+				my $nt = uc $nts[$random_number_in_id];
 				if($nt !~ m/[ACTGactg]/) { 
 					
 					$number_of_Ns_over_rand_numbers++; 
