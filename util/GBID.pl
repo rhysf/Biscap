@@ -133,7 +133,6 @@ sub tally_tail_probabilities {
 	return $lower_or_upper_tail;
 }
 
-
 sub print_binomial_probabilities {
 	my ($hom_prob_hash, $het_prob_hash, $het_prob_hash2, $het_prob_hash3, $OUTFILE, $min, $max) = @_;
 	open OUT1, ">>$OUTFILE";

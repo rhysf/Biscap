@@ -8,6 +8,7 @@ $VERSION = 0.1;
 @EXPORT = ();
 @EXPORT_OK = qw();
 %EXPORT_TAGS = (DEFAULT => [qw()], ALL =>[qw()]);
+use Data::Dumper;
 
 ### rfarrer@broadinstitute.org
 
@@ -59,10 +60,14 @@ sub read_GFF_lines {
 	return \%GFF_info;
 }
 
-sub gff_to_contig_parent_to_cds_hash {
+sub gff_to_struct {
 	my ($input, $feature_wanted, $desc_seperator, $desc_column, $desc_replace) = @_;
+
+	my %gff_struct;
+
+	# save GFF to memory
 	my (%hash_info, %hash_strand);
-	warn "gff_to_contig_parent_to_cds_hash: saving $feature_wanted from $input (split col $desc_column by $desc_seperator and remove $desc_replace)...\n";
+	warn "gff_to_struct: saving $feature_wanted from $input (split col $desc_column by $desc_seperator and remove $desc_replace)...\n";
 	open my $fh, '<', $input or die "Cannot open $input: $!\n";
 	GFF: while(my $line = <$fh>) {
 		chomp $line;
@@ -75,100 +80,129 @@ sub gff_to_contig_parent_to_cds_hash {
 		}
 		my ($contig, $feature_parent, $cds, $strand) = ($$GFF_info{'contig'}, $$GFF_info{'feature_parent'}, $$GFF_info{'CDS'}, $$GFF_info{'strand'});
 
-		# Save (avoid leaving a space at the end)
-		if(!defined $hash_info{$contig}{$feature_parent}) { $hash_info{$contig}{$feature_parent} = $cds; }
-		else { $hash_info{$contig}{$feature_parent} .= " $cds"; }
-		$hash_strand{$feature_parent} = $strand;
-	}
-	close $fh;
-	return (\%hash_info, \%hash_strand);
-}
+		# save contig -> gene = 1
+		$gff_struct{'contig_to_gene'}{$contig}{$feature_parent} = 1;
 
-sub gff_to_contig_parent_to_start_stop_string {
-	my ($input, $feature_wanted, $desc_seperator, $desc_column, $desc_replace) = @_;
-
-	my %feature_positions;
-	warn "gff_to_contig_parent_to_start_stop_string: saving $feature_wanted from $input (split col $desc_column by $desc_seperator and remove $desc_replace)...\n";
-	open my $fh, '<', $input or die "Cannot open $input: $!\n";
-	GFF: while(my $line = <$fh>) {
-		chomp $line;
-		my $GFF_info = &read_GFF_lines($line, $feature_wanted, $desc_seperator, $desc_column, $desc_replace);
-		next GFF if($$GFF_info{'next'} eq 1);
-		next GFF if($$GFF_info{'feature_wanted'} eq 'N');
-		if(defined $$GFF_info{'fasta'}) {
-			warn "FASTA found. Ending subroutine.\n";
-			last;
+		# save gene = contig
+		if(defined $gff_struct{'gene_to_contig'}{$feature_parent}) {
+			if($gff_struct{'gene_to_contig'}{$feature_parent} ne $contig) { die "gff_to_struct: ERROR: $feature_parent found on both $gff_struct{'gene_to_contig'}{$feature_parent} and $contig\n"; }
 		}
-		my ($contig, $feature_parent, $cds, $strand) = ($$GFF_info{'contig'}, $$GFF_info{'feature_parent'}, $$GFF_info{'CDS'}, $$GFF_info{'strand'});
-		my ($from, $to) = ($$GFF_info{'start'}, $$GFF_info{'stop'});
+		$gff_struct{'gene_to_contig'}{$feature_parent} = $contig;
 
-		# Save (avoid leaving a space at the end)
-		my $temp_feature_positions = ($from . '-' . $to . " ");
-		$feature_positions{$contig}{$feature_parent} .= $temp_feature_positions;
+		# save gene = strand
+		if(defined $gff_struct{'gene_to_strand'}{$feature_parent}) {
+			if($gff_struct{'gene_to_strand'}{$feature_parent} ne $strand) { 
+				warn "gff_to_struct: WARNING: $feature_parent found on both $gff_struct{'gene_to_strand'}{$feature_parent} and $strand strands\n"; 
+			}
+		}
+		$gff_struct{'gene_to_strand'}{$feature_parent} = $strand;
+
+		# Save exons (avoid leaving a space at the start or end)
+		if(!defined $gff_struct{'gene_to_cds'}{$feature_parent}) { $gff_struct{'gene_to_cds'}{$feature_parent} = $cds; }
+		else { $gff_struct{'gene_to_cds'}{$feature_parent} .= " $cds"; }
 	}
 	close $fh;
-	return \%feature_positions;
-}
 
-sub gff_to_parent_to_cds_hash {
-	my ($input, $feature_wanted, $desc_seperator, $desc_column, $desc_replace) = @_;
-	my (%hash_info, %hash_strand);
-	warn "gff_to_parent_to_cds_hash: saving $feature_wanted from $input (split col $desc_column by $desc_seperator and remove $desc_replace)...\n";
-	open my $fh, '<', $input or die "Cannot open $input: $!\n";
-	GFF: while(my $line = <$fh>) {
-		chomp $line;
-		my $GFF_info = &read_GFF_lines($line, $feature_wanted, $desc_seperator, $desc_column, $desc_replace);
-		next GFF if($$GFF_info{'next'} eq 1);
-		next GFF if($$GFF_info{'feature_wanted'} eq 'N');
-		my ($feature_parent, $cds, $strand) = ($$GFF_info{'feature_parent'}, $$GFF_info{'CDS'}, $$GFF_info{'strand'});
+	# check for and remove duplicates
+	# and save range 
+	warn "gff_to_struct: sort exons, and check and remove any duplicate exons...\n";
+	my $count_changed = 0;
+	my $count_not_changed = 0;
+	foreach my $gene(sort keys(%{$gff_struct{'gene_to_cds'}})) {
+		my $cds = $gff_struct{'gene_to_cds'}{$gene};
 
-		# Save (avoid leaving a space at the end)
-		if(!defined $hash_info{$feature_parent}) { $hash_info{$feature_parent} = $cds; }
-		else { $hash_info{$feature_parent} .= " $cds"; }
-		$hash_strand{$feature_parent} = $strand;
+		# find and replace
+		my $new_cds = &sort_and_check_exons_for_duplicates($cds);
+		if($cds ne $new_cds) { 
+			$count_changed++; 
+
+			# replace
+			$gff_struct{'gene_to_cds'}{$gene} = $new_cds;
+		}
+		else { $count_not_changed++; }
+
+		# cds range
+		my @cds_parts = split / /, $new_cds;
+		$gff_struct{'gene_to_cds_range'}{$gene}{'start'} = $cds_parts[0];
+		$gff_struct{'gene_to_cds_range'}{$gene}{'stop'} = $cds_parts[-1];
+		$gff_struct{'gene_to_cds_range'}{$gene}{'range'} = ($cds_parts[0] . '-' . $cds_parts[-1]);
 	}
-	close $fh;
-	return (\%hash_info, \%hash_strand);
+	my $total_seen = ($count_changed + $count_not_changed);
+
+	# warning
+	if($count_changed > 0) { warn "gff_to_struct: $count_changed / $total_seen changed (order or duplicate exons)\n"; }
+	else { warn "gff_to_struct: $total_seen entires saved\n"; }
+
+	return (\%gff_struct);
 }
 
-sub find_features {
-	my ($gff, $feature_interest, $contigs) = @_;
-	warn "find_features: saving locations of $feature_interest in $gff...\n";
-	my $feature_count = 0;
-	my %feature_positions;
-	my $gffio = Bio::Tools::GFF->new('-file' => "<$gff");
-	while(my $feat = $gffio->next_feature()) {
-		my $str = $feat->gff_string;
-		my @bits = split /\t/, $str;
-		my ($contig, $source, $feature, $from, $to, $score, $strand, $frame, $name) = @bits;
-		next if($feature ne $feature_interest);
-
-		# Save
-		$feature_count++;
-		$feature_positions{$contig}{$name} .= ($from . '-' . $to . " ");
-        }
-        $gffio->close();
-	warn ("Have found $feature_count $feature_interest" . "'s...\n");
-	return(\%feature_positions, $feature_count);
-}
-
-sub gff_final_features {
-	my $input = $_[0];
-	my (%final_feature_per_contig);
-	warn "gff_final_features: $input\n";
-	open my $fh, '<', $input or die "Cannot open $input: $!\n";
-	GFF: while(my $line = <$fh>) {
-		chomp $line;
-		my @bits = split /\t/, $line;
-		next GFF if ((@bits < 8) || ($line =~ m/^\#/));
-		my ($contig, $source, $feature, $start, $stop, $score, $strand, $frame, $full_description) = @bits;
-		
-		# final feature
-		if(!defined $final_feature_per_contig{$contig}) { $final_feature_per_contig{$contig} = $stop; }
-		elsif($final_feature_per_contig{$contig} < $stop) { $final_feature_per_contig{$contig} = $stop; }
+sub CDS_to_CDS_length {
+	my $cds = $_[0];
+	my $length = 0;
+	my @cds_parts = split / /, $cds;
+	foreach my $exon(@cds_parts) {
+		my @start_stop = split /-/, $exon;
+		$length += ($start_stop[1] - $start_stop[0]);
 	}
-	close $fh;
-	return (\%final_feature_per_contig);
+	return $length;
+}
+
+sub extract_gene_from_coords_new_negative {
+	my ($seq, $exon_string, $strand) = @_;
+	my ($extracted_gene);
+
+	my @exons = split /\s/, $exon_string;
+	if($strand eq '-') {
+		# Alphanumeric for [\d+-\d+\s]+
+		#my @exons_negative = sort { $b <=> $a || $b cmp $a } @exons;
+		my @exons_negative = sort { $b cmp $a } @exons;
+		@exons = @exons_negative;
+	}
+	foreach my $exon(@exons) {
+		my @terminals = split /-/, $exon;
+		for(my $i=0; $i< scalar(@terminals); $i+=2) { 
+			# +1 to turn array position to genome position
+			my $exon_sequence = substr $seq, ($terminals[$i] - 1), ($terminals[($i + 1)] - $terminals[$i] + 1);
+			if($strand eq '-') { $exon_sequence = fastafile::reverse_compliment($exon_sequence); }
+			$extracted_gene .= $exon_sequence;
+		}
+	}
+
+	# New. Uppercase
+	$extracted_gene = uc $extracted_gene;
+
+	# Reverse compliment for negative strand
+	#if($strand eq '-') { $extracted_gene = fastafile::reverse_compliment($extracted_gene); }
+	return $extracted_gene;
+}
+
+# local sub routines
+
+sub sort_and_check_exons_for_duplicates {
+	my $exons = $_[0];
+
+	# Check none of the exons are completely repeated
+	my @unsorted_exons = split /\s/, $exons;
+	my (%seen);
+	my @unique = grep { ! $seen{ $_ }++ } @unsorted_exons;
+
+	# Numerically sort
+	my @terminals;
+	foreach my $CDS(@unique) {
+		my @temp_terminals = split /-|\s/, $CDS;
+		push (@terminals, @temp_terminals);
+	}
+	my @sorted_terminals = sort { $a <=> $b } @terminals;
+
+	# Join
+	my $newline = '';	
+	for(my $i=0; $i< scalar(@terminals); $i+=2) {
+		$newline .= ($terminals[$i] . '-' . $terminals[($i + 1)] . ' '); 
+	}
+	$newline =~ s/\s$//;
+
+	# Return
+	return $newline;
 }
 
 1;

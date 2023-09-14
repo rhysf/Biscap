@@ -43,10 +43,11 @@ open my $ofh, '>', $outfile1 or die "Cannot open $outfile1 : $!\n";
 open my $ofh2, '>', $outfile2 or die "Cannot open $outfile2 : $!\n";
 
 # Save the length of reference for VCF header and print VCF header
-my ($reference_length) = fastafile::fasta_id_to_seq_length_hash($opt_r);
-my $print_header = &print_VCF_header($0, $opt_r, $reference_length, $settings, $opt_n);
+my $fasta = fastafile::fasta_to_struct($opt_r);
+my $print_header = &print_VCF_header($0, $opt_r, $fasta, $settings, $opt_n);
 
 # Read from Pileup and determine the state at each base
+my $variant_tallies;
 my ($tally_HOMSNP, $tally_HOMINS, $tally_HOMDEL, $tally_HETSNP, $tally_HETINS, $tally_HETDEL) = (0, 0, 0, 0, 0, 0);
 my ($tally_OUTDIS, $tally_HOMAGR, $tally_MINDEP, $tally_UNCHAR, $removed_bases) = (0, 0, 0, 0, 0);
 warn "Reading from file: $opt_p...\n";
@@ -185,7 +186,7 @@ sub MAX {
 }
 
 sub print_VCF_header {
-	my ($source, $reference, $FASTA_length_ref, $settings, $sample_name) = @_;
+	my ($source, $reference, $fasta_struct, $settings, $sample_name) = @_;
 	my @reference_name_parts = split /\//, $reference;
 	my $reference_file_name = $reference_name_parts[(scalar(@reference_name_parts) - 1)];
 	my @source_name_parts = split /\//, $source;
@@ -194,10 +195,13 @@ sub print_VCF_header {
 	print $ofh ('##source=' . "$source_file_name\n");
 	print $ofh ('##' . "$settings\n");
 	print $ofh ('##reference=' . "$reference_file_name\n");
-	foreach my $contig_name(sort keys(%{$FASTA_length_ref})) {
-		my $length = $$FASTA_length_ref{$contig_name};
-		print $ofh ('##contig=<ID=' . $contig_name . ',length=' . $length . '>' . "\n");
+
+	# contig lengths
+	foreach my $id(sort keys(%{$fasta_struct{'seq_length'}})) {
+		my $length = $$fasta_struct{'seq_length'}{$id};
+		print $ofh ('##contig=<ID=' . $id . ',length=' . $length . '>' . "\n");
 	}
+
 	print $ofh ('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">' . "\n");
 	print $ofh ('##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">' . "\n");
 	print $ofh ('##FORMAT=<ID=MMQ,Number=1,Type=Integer,Description="Mean mapping quality score">' . "\n");

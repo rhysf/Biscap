@@ -5,6 +5,7 @@ use Getopt::Std;
 use FindBin qw($Bin);
 use lib "$Bin/../modules";
 use read_GFF;
+use read_FASTA;
 use File::Basename;
 
 ### rfarrer@broadinstitute.org
@@ -44,47 +45,29 @@ die "Currently, -t has to be 'SNP' or 'HET' if specifying -c/-f\n" if ((($opt_t 
 open my $ofh1, '>', $opt_o or die "Cannot open $opt_o : $!\n";
 open my $ofh2, '>', $opt_a or die "Cannot open $opt_a : $!\n";
 
-# Save genome/sequence for mutating (make homologous version if heterozygous)
-warn "Saving $opt_s...\n";
-my ($genome_fna, $genome_size, $genome_length) = &save_sequence_and_lengths_from_FASTA($opt_s, $opt_c, $opt_t);
+# Save genome/sequence to in silico mutate
+my $fasta = fastafile::fasta_to_struct($opt_s);
 
-# Go through GFF (if specified) to save feature sequneces and length
-my  ($CDS_info, $strand_info, $feature_positions);
-my $feature_range = 0;
-if($opt_f ne 'genome') { 
-	($CDS_info, $strand_info) = gfffile::gff_to_contig_parent_to_cds_hash($opt_g, $opt_f, $opt_p, $opt_c, $opt_r); 
-	$feature_positions = gfffile::gff_to_contig_parent_to_start_stop_string($opt_g, $opt_f, $opt_p, $opt_c, $opt_r);
-	foreach my $contig(keys %{$CDS_info}) { 
-		foreach my $gene(keys %{$$CDS_info{$contig}}) {
-			my $seq = $$CDS_info{$contig}{$gene};
+# for heterozygous positions, need to add homologous genome
+if($opt_t eq 'HET') { $fasta = fastafile::add_homologous_genome($fasta, '_homologous'); }
+if($opt_t eq 'HETRIP') { $fasta = fastafile::add_homologous_genome($fasta, '_homologous2'); }
 
-			# Extend feature range
-			$feature_range += length($seq);
-			if($opt_t =~ m/CNV|HET/) { $feature_range += length($seq); }
-			if($opt_t =~ m/HETTRIP/) { $feature_range += length($seq); }
-
-			# Save extra feature positions
-			if($opt_t =~ m/HET|HETTRIP/) { $$feature_positions{($contig . '_homologous')}{$gene} .= $$feature_positions{$contig}{$gene}; }
-			if($opt_t eq 'HETTRIP') { $$feature_positions{($contig . '_homologous2')}{$gene} .= $$feature_positions{$contig}{$gene}; }
-		}
-	}
-}
-
-# Which range to use
+# range for mutating
+my $genome_length = $$fasta{'total_length'};
 my $range = $genome_length;
-if($feature_range ne 0) { $range = $feature_range; }
+
+# Go through GFF (if specified) to save feature sequences and length
+my $gff_struct;
+if($opt_f ne 'genome') { 
+	$gff_struct = gfffile::gff_to_struct($opt_g, $opt_f, $opt_p, $opt_c, $opt_r);
+	($gff_struct, $range) = &extend_features_and_count_length($gff_struct, $opt_t);
+}
 
 # Check range is bigger than number of mutations
-if($opt_t eq 'CNV') { die "Too many mutations required ($opt_n) for number of features ($opt_f) found for mutating ($feature_range)\n" if($feature_range < $opt_n); } 
-else { die "Too many mutations required ($opt_n) for amount of sequence (nt) found for mutating ($genome_length)\n" if($genome_length < $opt_n); }
+die "Error: Too many mutations required for range ($opt_n / $range) in feature $opt_f\n" if($range < $opt_n);
 
-# Random positions generator
-my %rand_numbers;
-warn "Generating $opt_n / $range $opt_t...\n";
-while(scalar(keys %rand_numbers) < $opt_n) {
-	my $random_number = int(rand($range)) + 1; 
-	$rand_numbers{$random_number} = 1;
-}
+# Generate random numbers
+my $rand_numbers = &generate_random_numbers($opt_n, $range);
 
 # Modify anywhere in the genome
 my $number_of_Ns_over_rand_numbers = 0;
@@ -92,113 +75,105 @@ print $ofh1 "Contig\tPosition\tnt\tintroduced $opt_t\tFeature\n";
 if($opt_f eq 'genome') {
 	warn "Introducing mutations into $opt_g\n";
 	my $seq_length_gone_through = 0;
-	foreach my $id(sort keys %{$genome_fna}) {
-		my $seq = $$genome_fna{$id};
+	foreach my $id(sort keys %{$$fasta{'seq'}}) {
+		my $seq = $$fasta{'seq'}{$id};
 		my @nts = split //, $seq;
 
-		foreach my $numbers(sort {$a<=>$b} keys %rand_numbers) {
+		foreach my $numbers(sort {$a<=>$b} keys %{$rand_numbers}) {
 			my $random_number_in_id = ($numbers - $seq_length_gone_through);
-			if(($random_number_in_id <= length($seq)) && ($random_number_in_id > 1)) {
+
+			next if($random_number_in_id < length($seq));
 				
-				my $nt = uc $nts[$random_number_in_id];
-				if($nt !~ m/[ACTGactg]/) { 
-					
-					$number_of_Ns_over_rand_numbers++; 
-					my ($new_random_nucleotide, $random_number2);
-					while(!defined $new_random_nucleotide) {
-						$random_number2 = int(rand(scalar(@nts))) + 1; 
-						if(!exists $rand_numbers{($seq_length_gone_through + $random_number2)}) {
-							my $test_nt = $nts[$random_number2];
-							if($test_nt =~ m/[ACTGactg]/) { $new_random_nucleotide = $test_nt; }
-						}
-					}
-					$random_number_in_id = ($random_number2);
-					$nt = $new_random_nucleotide;
-				}
-				my ($newbase);	
-				if($opt_t eq 'DEL') { $newbase = ''; }
-				if(($opt_t eq 'SNP') || ($opt_t eq 'HET') || ($opt_t eq 'HETTRIP')) { $newbase = randomnucleotide($nt); }
-				if($opt_t eq 'INS') { $newbase = ($nt . randomnucleotide($nt)); }
-				print $ofh1 "$id\t$random_number_in_id\t$nt\t$newbase\t$opt_g\n";
-				$nts[$random_number_in_id] = $newbase;
+			my $nt = uc $nts[$random_number_in_id];
+
+			# choose a new random number if previous one falls over an 'N' or similarly unsuitable base.
+			if($nt !~ m/[ACTG]/) { 
+				$number_of_Ns_over_rand_numbers++; 
+				($nt, $random_number_in_id) = &find_new_random_number($rand_numbers, $seq_length_gone_through, \@nts);
 			}
+
+			my ($newbase);	
+			if($opt_t eq 'DEL') { $newbase = ''; }
+			if(($opt_t eq 'SNP') || ($opt_t eq 'HET') || ($opt_t eq 'HETTRIP')) { $newbase = randomnucleotide($nt); }
+			if($opt_t eq 'INS') { $newbase = ($nt . randomnucleotide($nt)); }
+			print $ofh1 "$id\t$random_number_in_id\t$nt\t$newbase\t$opt_g\n";
+			$nts[$random_number_in_id] = $newbase;
 		}
 		$seq_length_gone_through += length($seq);
-		$$genome_fna{$id} = join('',@nts);
+		$$fasta{'seq'}{$id} = join('',@nts);
 	}
 	my $number_of_successful_positions = ($opt_n - $number_of_Ns_over_rand_numbers);
 	warn "Introduced $number_of_successful_positions $opt_t + $number_of_Ns_over_rand_numbers that were picked over Ns in first call\n";
 }
 
 # Modify specific places in the genome
-if($opt_c) {
+if(defined $opt_g) {
 	warn "Introducing mutations into the $opt_f of $opt_g\n";
 	my $random_numbers_gone_through = 0;
+
+	# if it's CNV, i need the sequence of the cds
+	my $cds_sequences;
+	if($opt_t eq 'CNV') { $cds_sequences = &save_sequences_from_cds($fasta, $gff_struct); }
+
 	# Go through each of the contigs
-	foreach my $id(sort keys %{$genome_fna}) {
-		my $seq = $$genome_fna{$id};
+	foreach my $id(sort keys %{$$fasta{'seq'}}) {
+		my $seq = $$fasta{'seq'}{$id};
 		my @nts = split //, $seq;
+
 		# Go through each feature that did not have any overlaps with other features
-		foreach my $feature_names(sort keys %{$$feature_positions{$id}}) {
-			
-			if(($opt_t eq 'SNP') || ($opt_t eq 'HET') || ($opt_t eq 'HETTRIP')) { 
-				my $feature_positions = $$feature_positions{$id}{$feature_names};
-				my @seperate_positions = split /\s/, $feature_positions;
-				foreach(@seperate_positions) {
-					my @terminals = split /-/, $_;
-					for(my $i=$terminals[0]; $i<$terminals[1]; $i++) {
+		foreach my $gene(sort keys %{$$gff_struct{'contig_to_gene'}{$id}}) {
+
+			# SNPs, Hets and Het-triploids
+			if($opt_t =~ m/SNP|HET/) { 
+				
+				my $cds = $$gff_struct{'gene_to_cds'}{$gene};
+				my @exons = split /\s/, $cds;
+				EXON: foreach my $exon(@exons) {
+					my @terminals = split /-/, $exon;
+					POSITION: for(my $i=$terminals[0]; $i<$terminals[1]; $i++) {
 						$random_numbers_gone_through++;
-						if(exists $rand_numbers{$random_numbers_gone_through}) {
-							my $nt = $nts[$i];
-							if($nt eq 'N') { $number_of_Ns_over_rand_numbers++; }
-							else {	
-								my $newbase = &randomnucleotide($nt);
-								print $ofh1 "$id\t$i\t$nt\t$newbase\t$feature_names\n";
-								$nts[$i] = $newbase;
-							}
-						}
+
+						next POSITION if(!exists $$rand_numbers{$random_numbers_gone_through});
+
+						my $nt = $nts[$i];
+
+						# tally if random number falls over an 'N'
+						if($nt eq 'N') { 
+							$number_of_Ns_over_rand_numbers++; 
+							next POSITION;
+						}	
+
+						my $newbase = &randomnucleotide($nt);
+						print $ofh1 "$id\t$i\t$nt\t$newbase\t$gene\n";
+						$nts[$i] = $newbase;
 					}
 				}
 			}
-			if($opt_t eq 'CNV') { 
-				$random_numbers_gone_through++;
-				if(exists $rand_numbers{$random_numbers_gone_through}) {
-					my @feature_nts = split //, $$CDS_info{$id}{$feature_names};
-					
-					#warn "my feature nts = @feature_nts \n";
-					
-					my $pre_CNV_contig_length = (scalar(@nts) + 1);
-					push @nts, @feature_nts;
-					my $post_CNV_contig_length = scalar(@nts);
-					print $ofh1 "$id\t$pre_CNV_contig_length-$post_CNV_contig_length\tCNV+\tCNV+\t$feature_names\n";
-					
-					#warn "pre = $pre_CNV_contig_length and post = $post_CNV_contig_length\n";	
-				}
+
+			# CNV
+			elsif($opt_t eq 'CNV') { 
+				my $gene_seq = $$cds_sequences{$gene};
+				my @feature_nts = split //, $gene_seq;
+
+				# put the new gene right on the end of the genome!
+				my $pre_CNV_contig_length = (scalar(@nts) + 1);
+				push @nts, @feature_nts;
+				my $post_CNV_contig_length = scalar(@nts);
+				print $ofh1 "$id\t$pre_CNV_contig_length-$post_CNV_contig_length\tCNV+\tCNV+\t$gene\n";
 			}
+
+			else { die "Error: no know opt_t : $opt_t"; }
 		}
-		$$genome_fna{$id} = join('',@nts);
+		$$fasta{'seq'}{$id} = join('',@nts);
 	}
 	my $number_of_successful_positions = ($opt_n - $number_of_Ns_over_rand_numbers);
 	warn "Introduced $number_of_successful_positions $opt_t ($number_of_Ns_over_rand_numbers Ns found but not changed)\n";
-	warn "$random_numbers_gone_through Random numbers gone through in feature file\n";
+	warn "Random numbers gone through in feature file: $random_numbers_gone_through\n";
 }
 close $ofh1;
 
 # Print modified genome
-warn "Printing modified $opt_s...\n";
-foreach my $contig(sort keys %{$genome_fna}) { 
-	print $ofh2 ">$contig\n"; 
-	my $seq = $$genome_fna{$contig};
-	my @seq_bits = split //, $seq;
-	my ($count, $contig_count) = (0, 0);
-	foreach(@seq_bits) {
-		$count++; $contig_count++;
-		print $ofh2 "$_";
-		if(($count eq 60) && (defined $seq_bits[$contig_count + 1])) { print $ofh2 "\n"; $count=0 }
-	}
-	print $ofh2 "\n";
-	$contig_count = 0;
-}
+fastafile::fasta_struct_print_simple_outfile($fasta);
 
 sub randomnucleotide { 
 	my $consbase = shift;
@@ -210,31 +185,75 @@ sub randomnucleotide {
 	return $nucs[rand @nucs];
 }
 
-sub save_sequence_and_lengths_from_FASTA {
-	my ($fasta, $gff, $mutation_type) = @_;
+sub generate_random_numbers {
+	my ($number_wanted, $range) = @_;
+	my %rand_numbers;
+	warn "generate_random_numbers: $opt_n / $range\n";
+	NUMBERS: while(scalar(keys %rand_numbers) < $number_wanted) {
+		my $random_number = int(rand($range)) + 1;
+		next NUMBERS if($random_number <= 1);
+		$rand_numbers{$random_number} = 1;
+	}
+	return \%rand_numbers;
+}
 
-	# Save FASTA
-	my (%genome_fna, %genome_size);
-	my $total_length = 0;
-	my $inseq = Bio::SeqIO->new('-file' => "<$fasta",'-format' => 'fasta');
-	while (my $seq_obj = $inseq->next_seq) {
-		my $id = $seq_obj->id;
-		my $seq = $seq_obj->seq;
-		$genome_fna{$id} = $seq;
-		$genome_size{$id} = length($seq);
-		$total_length += length($seq);
-
-		# For hets
-		if($mutation_type =~ m/HET|HETTRIP/) {
-			$genome_fna{($id . '_homologous')} = $seq;
-			$genome_size{($id . '_homologous')} = length($seq);
-			$total_length += length($seq);
-		}
-		if($mutation_type eq 'HETTRIP') { 
-			$genome_fna{($id . '_homologous2')} = $seq;
-			$genome_size{($id . '_homologous2')} = length($seq);
-			$total_length += length($seq);
+sub find_new_random_number {
+	my ($rand_numbers, $seq_length_gone_through, $nts) = @_;
+	my ($new_random_nucleotide, $random_number2);
+	while(!defined $new_random_nucleotide) {
+		$random_number2 = int(rand(scalar(@{$nts}))) + 1; 
+		if(!exists $$rand_numbers{($seq_length_gone_through + $random_number2)}) {
+			my $test_nt = $$nts[$random_number2];
+			if($test_nt =~ m/[ACTGactg]/) { $new_random_nucleotide = $test_nt; }
 		}
 	}
-	return (\%genome_fna, \%genome_size, $total_length);
+	return ($new_random_nucleotide, $random_number2);
+}
+
+sub extend_features_and_count_length {
+	my ($gff_struct, $mutation_type) = @_;
+	my $feature_range = 0;
+
+	warn "extend_features_and_count_length:";
+	foreach my $gene(keys %{$$gff_struct{'gene_to_cds'}}) {
+		my $contig = $$gff_struct{'gene_to_contig'}{$gene};
+		my $cds = $$gff_struct{'gene_to_cds'}{$gene};
+		my $strand = $$gff_struct{'gene_to_strand'}{$gene};
+		my $cds_length = gfffile::CDS_to_CDS_length($cds);
+		$feature_range += $cds_length;
+
+		# extend feature range
+		if($mutation_type eq 'HET') { 
+			my $hom_gene_id = ($gene . '_homologous');
+			$feature_range += $cds_length;
+			$$gff_struct{'gene_to_cds'}{$hom_gene_id} = $cds;
+			$$gff_struct{'gene_to_contig'}{$hom_gene_id} = $contig;
+			$$gff_struct{'gene_to_strand'}{$hom_gene_id} = $strand;
+			$$gff_struct{'contig_to_gene'}{$contig}{$hom_gene_id} = 1;
+		}
+		if($mutation_type eq 'HETRIP') {
+			my $hom_gene_id = ($gene . '_homologous2');
+			$feature_range += $cds_length;
+			$$gff_struct{'gene_to_cds'}{$hom_gene_id} = $cds;
+			$$gff_struct{'gene_to_contig'}{$hom_gene_id} = $contig;
+			$$gff_struct{'gene_to_strand'}{$hom_gene_id} = $strand;
+			$$gff_struct{'contig_to_gene'}{$contig}{$hom_gene_id} = 1;
+		}
+	}
+	return ($gff_struct, $feature_range);
+}
+
+sub save_sequences_from_cds {
+	my ($fasta, $gff) = @_;
+	my %cds_sequences;
+
+	foreach my $gene(sort keys %{$$gff_struct{'gene_to_cds'}}) {
+		my $cds_coords = $$gff_struct{'gene_to_cds'}{$gene};
+		my $contig = $$gff_struct{'gene_to_contig'}{$gene};
+		my $strand = $$gff_struct{'gene_to_strand'}{$gene};
+		my $contig_seq = $$fasta{'seq'}{$contig};
+
+		$cds_sequences{$gene} = gfffile::extract_gene_from_coords_new_negative($contig_seq, $cds_coords, $strand); 
+	}
+	return \%cds_sequences;
 }
